@@ -10,5 +10,5 @@ def get_ip(request: Request):
 
     with geoip2.database.Reader('db/GeoLite2-Country.mmdb') as reader:
         response = reader.country(client_host)
-        print(f'recieved_report ', 'IP:', client_host, 'Country_Code:', response.country.iso_code, 'Country_name:', response.country.name)
+        print('recieved_report ', 'IP:', client_host, 'Country_Code:', response.country.iso_code, 'Country_name:', response.country.name)
     return {"status": "OK"}
