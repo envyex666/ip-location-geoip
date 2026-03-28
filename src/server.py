@@ -11,22 +11,27 @@ from pydantic import BaseModel, Field
 
 app = FastAPI()
 
+
 class ApiResponse(BaseModel):
     status: Literal["OK", "ERROR"]
     error: Optional[str] = Field(default=None)
+
 
 @dataclass
 class LogReport:
     ip: str
     country_code: str
 
+
 secret_token: Optional[str] = os.environ.get("SECRET_TOKEN")
+
 
 def error_response(message: str, status_code: int = 200) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content=ApiResponse(status="ERROR", error=message).model_dump(),
     )
+
 
 @app.middleware("http")
 async def check_token(request: Request, call_next):
@@ -39,6 +44,7 @@ async def check_token(request: Request, call_next):
         return error_response("Unauthorized", status_code=401)
 
     return await call_next(request)
+
 
 @app.post("/report", response_model=ApiResponse)
 async def get_ip(request: Request) -> ApiResponse:
