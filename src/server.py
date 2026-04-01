@@ -1,78 +1,88 @@
+import logging
 import os
-from dataclasses import dataclass
-from typing import Literal, Optional
+from contextlib import asynccontextmanager
+from enum import IntEnum
 
 import geoip2.database
 import geoip2.errors
-import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-app = FastAPI()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+secret_token = os.environ.get("SECRET_TOKEN", "").strip()
+
+
+class ResponseCode(IntEnum):
+    OK = status.HTTP_200_OK
+    BAD_REQUEST = status.HTTP_400_BAD_REQUEST
+    NOT_FOUND = status.HTTP_404_NOT_FOUND
+    INTERNAL_SERVER_ERROR = status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 class ApiResponse(BaseModel):
-    status: Literal["OK", "ERROR"]
-    error: Optional[str] = Field(default=None)
+    code: ResponseCode
 
 
-@dataclass
-class LogReport:
+class LogReport(BaseModel):
     ip: str
     country_code: str
 
 
-secret_token: Optional[str] = os.environ.get("SECRET_TOKEN")
-
-
-def error_response(message: str, status_code: int = 200) -> JSONResponse:
+def make_error_response(http_status: ResponseCode) -> JSONResponse:
     return JSONResponse(
-        status_code=status_code,
-        content=ApiResponse(status="ERROR", error=message).model_dump(),
+        status_code=http_status,
+        content=ApiResponse(code=http_status).model_dump(),
     )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.geoip_reader = geoip2.database.Reader("db/GeoLite2-Country.mmdb")
+    logger.info("GeoIP reader opened")
+    try:
+        yield
+    finally:
+        app.state.geoip_reader.close()
+        logger.info("GeoIP reader closed")
+
+
+app = FastAPI(lifespan=lifespan)
+
+
 @app.middleware("http")
-async def check_token(request: Request, call_next):
-    token = request.headers.get("AUTH_TOKEN")
-
-    if secret_token is None or secret_token.isspace():
-        return error_response("You must write token or token is empty", status_code=500)
-
-    if token != secret_token:
-        return error_response("Unauthorized", status_code=401)
-
+async def auth_middleware(request: Request, call_next):
+    if request.headers.get("AUTH_TOKEN", "").strip() != secret_token:
+        return Response(status_code=status.HTTP_401_UNAUTHORIZED)
     return await call_next(request)
 
 
-@app.post("/report", response_model=ApiResponse)
-async def get_ip(request: Request) -> ApiResponse:
+@app.post("/api/v1/report", response_model=ApiResponse)
+async def get_ip(request: Request):
+    client = request.client
+    if client is None or not client.host:
+        return make_error_response(ResponseCode.BAD_REQUEST)
+
+    client_host = client.host
+
     try:
-        if request.client is None:
-            return ApiResponse(status="ERROR", error="Cant determine client IP")
-
-        client_host = request.client.host
-        if not client_host:
-            return ApiResponse(status="ERROR", error="Client host is empty")
-
-        with geoip2.database.Reader("db/GeoLite2-Country.mmdb") as reader:
-            response = reader.country(client_host)
-
+        response = request.app.state.geoip_reader.country(client_host)
         country_code = response.country.iso_code
-        if country_code is None:
-            return ApiResponse(status="ERROR", error="Cant determine country code")
 
-        print(LogReport(ip=client_host, country_code=country_code))
-        return ApiResponse(status="OK", error=None)
+        if country_code is None:
+            logger.warning("Country code is none")
+            return make_error_response(ResponseCode.NOT_FOUND)
 
     except geoip2.errors.AddressNotFoundError:
-        return ApiResponse(
-            status="ERROR",
-            error="No Adress in GeoIP database",
-        )
-    except Exception as e:
-        return ApiResponse(
-            status="ERROR",
-            error=f"Unknown error: {str(e)}",
-        )
+        logger.warning("IP not found in GeoIP database")
+        return make_error_response(ResponseCode.NOT_FOUND)
+
+    except Exception:
+        logger.exception("Failed to resolve country")
+        return make_error_response(ResponseCode.INTERNAL_SERVER_ERROR)
+
+    print(LogReport(ip=client_host, country_code=country_code))
+    return ApiResponse(code=ResponseCode.OK)
