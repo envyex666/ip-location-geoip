@@ -1,88 +1,101 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from enum import IntEnum
+from enum import Enum
 
 import geoip2.database
 import geoip2.errors
-from fastapi import FastAPI, Request, Response, status
+import uvicorn
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-secret_token = os.environ.get("SECRET_TOKEN", "").strip()
-
-
-class ResponseCode(IntEnum):
-    OK = status.HTTP_200_OK
-    BAD_REQUEST = status.HTTP_400_BAD_REQUEST
-    NOT_FOUND = status.HTTP_404_NOT_FOUND
-    INTERNAL_SERVER_ERROR = status.HTTP_500_INTERNAL_SERVER_ERROR
+class ErrorEnum(Enum):
+    BAD_REQUEST = 400, "bad request"
+    INVALID_IP = 400, "invalid ip"
+    IP_NOT_FOUND = 404, "ip not found in database"
+    COUNTRY_NOT_FOUND = 404, "country not found"
+    INTERNAL_ERROR = 500, "internal error"
 
 
-class ApiResponse(BaseModel):
-    code: ResponseCode
-
-
-class LogReport(BaseModel):
-    ip: str
-    country_code: str
-
-
-def make_error_response(http_status: ResponseCode) -> JSONResponse:
+def error(err: ErrorEnum) -> JSONResponse:
+    status_code, message = err.value
     return JSONResponse(
-        status_code=http_status,
-        content=ApiResponse(code=http_status).model_dump(),
+        status_code=status_code,
+        content={"status_code": status_code, "message": message},
     )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.getLogger("uvicorn.access").disabled = True
+
+    logger = logging.getLogger("app")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(place)s %(message)s", "%Y-%m-%d %H:%M:%S")
+    )
+    logger.addHandler(handler)
+    logger.propagate = False
+
+    app.state.logger = logger
+    app.state.secret_token = os.getenv("SECRET_TOKEN", "").strip()
     app.state.geoip_reader = geoip2.database.Reader("db/GeoLite2-Country.mmdb")
-    logger.info("GeoIP reader opened")
     try:
         yield
     finally:
         app.state.geoip_reader.close()
-        logger.info("GeoIP reader closed")
 
 
 app = FastAPI(lifespan=lifespan)
+router = APIRouter(prefix="/v1")
 
 
 @app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    if request.headers.get("AUTH_TOKEN", "").strip() != secret_token:
-        return Response(status_code=status.HTTP_401_UNAUTHORIZED)
-    return await call_next(request)
+async def auth(request: Request, call_next):
+    if request.headers.get("AUTH_TOKEN", "").strip() != request.app.state.secret_token:
+        return JSONResponse(status_code=401, content={})
+    try:
+        return await call_next(request)
+    except Exception as e:
+        request.app.state.logger.exception(str(e), extra={"place": "middleware"})
+        return error(ErrorEnum.INTERNAL_ERROR)
 
 
-@app.post("/api/v1/report", response_model=ApiResponse)
-async def get_ip(request: Request):
-    client = request.client
-    if client is None or not client.host:
-        return make_error_response(ResponseCode.BAD_REQUEST)
-
-    client_host = client.host
+@router.post("/report")
+async def report(request: Request):
+    if not request.client or not request.client.host:
+        return error(ErrorEnum.BAD_REQUEST)
 
     try:
-        response = request.app.state.geoip_reader.country(client_host)
-        country_code = response.country.iso_code
+        country_code = request.app.state.geoip_reader.country(
+            request.client.host
+        ).country.iso_code
+        if not country_code:
+            return error(ErrorEnum.COUNTRY_NOT_FOUND)
+    except geoip2.errors.AddressNotFoundError as e:
+        request.app.state.logger.warning(str(e), extra={"place": "geoip"})
+        return error(ErrorEnum.IP_NOT_FOUND)
+    except ValueError as e:
+        request.app.state.logger.warning(str(e), extra={"place": "ip"})
+        return error(ErrorEnum.INVALID_IP)
+    except Exception as e:
+        request.app.state.logger.error(str(e), extra={"place": "report"})
+        return error(ErrorEnum.INTERNAL_ERROR)
 
-        if country_code is None:
-            logger.warning("Country code is none")
-            return make_error_response(ResponseCode.NOT_FOUND)
+    print("LogReport:", {"ip": request.client.host, "country_code": country_code})
+    return {"status": "ok"}
 
-    except geoip2.errors.AddressNotFoundError:
-        logger.warning("IP not found in GeoIP database")
-        return make_error_response(ResponseCode.NOT_FOUND)
 
-    except Exception:
-        logger.exception("Failed to resolve country")
-        return make_error_response(ResponseCode.INTERNAL_SERVER_ERROR)
+app.include_router(router, prefix="/api")
 
-    print(LogReport(ip=client_host, country_code=country_code))
-    return ApiResponse(code=ResponseCode.OK)
+
+def main():
+    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)
+
+
+if __name__ == "__main__":
+    main()
