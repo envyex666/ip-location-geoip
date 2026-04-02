@@ -11,10 +11,10 @@ from fastapi.responses import JSONResponse
 
 
 class ErrorEnum(Enum):
-    BAD_REQUEST = 400, "bad request"
-    IP_NOT_FOUND = 404, "ip not found in database"
-    COUNTRY_NOT_FOUND = 404, "country not found"
-    INTERNAL_ERROR = 500, "internal error"
+    BAD_REQUEST = 400, "Bad request"
+    IP_NOT_FOUND = 404, "IP not found in database"
+    COUNTRY_NOT_FOUND = 404, "Country not found"
+    INTERNAL_ERROR = 500, "Internal error"
 
 
 def error(err: ErrorEnum) -> JSONResponse:
