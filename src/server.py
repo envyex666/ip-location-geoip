@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 
 class ErrorEnum(Enum):
     BAD_REQUEST = 400, "bad request"
-    INVALID_IP = 400, "invalid ip"
     IP_NOT_FOUND = 404, "ip not found in database"
     COUNTRY_NOT_FOUND = 404, "country not found"
     INTERNAL_ERROR = 500, "internal error"
@@ -67,26 +66,20 @@ async def auth(request: Request, call_next):
 
 @router.post("/report")
 async def report(request: Request):
-    if not request.client or not request.client.host:
-        return error(ErrorEnum.BAD_REQUEST)
-
     try:
-        country_code = request.app.state.geoip_reader.country(
-            request.client.host
-        ).country.iso_code
+        assert request.client is not None
+        ip = request.client.host
+        country_code = request.app.state.geoip_reader.country(ip).country.iso_code
         if not country_code:
             return error(ErrorEnum.COUNTRY_NOT_FOUND)
     except geoip2.errors.AddressNotFoundError as e:
         request.app.state.logger.warning(str(e), extra={"place": "geoip"})
         return error(ErrorEnum.IP_NOT_FOUND)
-    except ValueError as e:
-        request.app.state.logger.warning(str(e), extra={"place": "ip"})
-        return error(ErrorEnum.INVALID_IP)
     except Exception as e:
         request.app.state.logger.error(str(e), extra={"place": "report"})
         return error(ErrorEnum.INTERNAL_ERROR)
 
-    print("LogReport:", {"ip": request.client.host, "country_code": country_code})
+    print("LogReport:", {"ip": ip, "country_code": country_code})
     return {"status": "ok"}
 
 
