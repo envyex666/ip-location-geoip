@@ -12,6 +12,7 @@ pip install -r requirements.txt
 ```
 Download link Maxmind-Database
 [GeoLite2-Country.mmdb](https://git.io/GeoLite2-Country.mmdb)
+
 Start your server.
 ```bash
 SECRET_TOKEN="123" uvicorn server:app --host 127.0.0.1 --port 8081 --app-dir src/
