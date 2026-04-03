@@ -29,7 +29,7 @@ class StatusResponse(BaseModel):
 async def lifespan(app: FastAPI):
     app.state.secret_token = os.getenv("SECRET_TOKEN", "").strip()
     db_dir = os.getenv("DB_DIR", "db").strip()
-    db_path = os.path.join(db_dir, "Geo-Country.mmdb")
+    db_path = os.path.join(db_dir, "GeoLite2-Country.mmdb")
     if not os.path.isfile(db_path):
         raise FileNotFoundError(db_path)
     app.state.geoip_reader = geoip2.database.Reader(db_path)
