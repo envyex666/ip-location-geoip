@@ -2,6 +2,10 @@
 ### Description
 This app on python for get client location from his ip by request.
 
+Download link Maxmind-Database
+[GeoLite2-Country.mmdb](https://git.io/GeoLite2-Country.mmdb)
+
+You should put database in db directory
 ## Start
 Prepare python virtual enviroments.
 ```bash
@@ -10,9 +14,6 @@ source venv/bin/activate
 install requirements
 pip install -r requirements.txt
 ```
-Download link Maxmind-Database
-[GeoLite2-Country.mmdb](https://git.io/GeoLite2-Country.mmdb)
-
 Start your server.
 ```bash
 SECRET_TOKEN="123" uvicorn server:app --host 127.0.0.1 --port 8081 --app-dir src/
