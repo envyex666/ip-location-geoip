@@ -1,48 +1,38 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from enum import Enum
 
 import geoip2.database
 import geoip2.errors
 import uvicorn
-from fastapi import APIRouter, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, FastAPI, Request, Response, status
+from pydantic import BaseModel
+
+logging.basicConfig(
+    level=logging.WARNING,
+    format="log %(asctime)s %(message)s",
+    datefmt="%Y.%d.%m %H:%M",
+    force=True,
+)
 
 
-class ErrorEnum(Enum):
-    BAD_REQUEST = 400, "Bad request"
-    IP_NOT_FOUND = 404, "IP not found in database"
-    COUNTRY_NOT_FOUND = 404, "Country not found"
-    INTERNAL_ERROR = 500, "Internal error"
+class LogReport(BaseModel):
+    ip: str
+    country_code: str
 
 
-def error(err: ErrorEnum) -> JSONResponse:
-    status_code, message = err.value
-    return JSONResponse(
-        status_code=status_code,
-        content={"status_code": status_code, "message": message},
-    )
+class StatusResponse(BaseModel):
+    status_code: int
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.getLogger("uvicorn.access").disabled = True
-
-    logger = logging.getLogger("app")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(place)s %(message)s", "%Y-%m-%d %H:%M:%S")
-    )
-    logger.addHandler(handler)
-    logger.propagate = False
-
-    app.state.logger = logger
     app.state.secret_token = os.getenv("SECRET_TOKEN", "").strip()
-    app.state.geoip_reader = geoip2.database.Reader("db/GeoLite2-Country.mmdb")
+    db_dir = os.getenv("DB_DIR", "db").strip()
+    db_path = os.path.join(db_dir, "Geo-Country.mmdb")
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(db_path)
+    app.state.geoip_reader = geoip2.database.Reader(db_path)
     try:
         yield
     finally:
@@ -54,40 +44,45 @@ router = APIRouter(prefix="/v1")
 
 
 @app.middleware("http")
-async def auth(request: Request, call_next):
+async def auth_middleware(request: Request, call_next):
     if request.headers.get("AUTH_TOKEN", "").strip() != request.app.state.secret_token:
-        return JSONResponse(status_code=401, content={})
-    try:
-        return await call_next(request)
-    except Exception as e:
-        request.app.state.logger.exception(str(e), extra={"place": "middleware"})
-        return error(ErrorEnum.INTERNAL_ERROR)
+        return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+    return await call_next(request)
 
 
-@router.post("/report")
+@router.post("/report", response_model=StatusResponse)
 async def report(request: Request):
     try:
         assert request.client is not None
         ip = request.client.host
-        country_code = request.app.state.geoip_reader.country(ip).country.iso_code
-        if not country_code:
-            return error(ErrorEnum.COUNTRY_NOT_FOUND)
-    except geoip2.errors.AddressNotFoundError as e:
-        request.app.state.logger.warning(str(e), extra={"place": "geoip"})
-        return error(ErrorEnum.IP_NOT_FOUND)
-    except Exception as e:
-        request.app.state.logger.error(str(e), extra={"place": "report"})
-        return error(ErrorEnum.INTERNAL_ERROR)
 
-    print("LogReport:", {"ip": ip, "country_code": country_code})
-    return {"status": "ok"}
+        if not ip:
+            logging.warning("client ip is empty")
+            return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+        response = request.app.state.geoip_reader.country(ip)
+        country_code = response.country.iso_code
+
+        if country_code is None:
+            logging.warning("country code not found for this ip %s", ip)
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+        print("LogReport:", LogReport(ip=ip, country_code=country_code))
+        return StatusResponse(status_code=status.HTTP_200_OK)
+
+    except geoip2.errors.AddressNotFoundError as e:
+        logging.warning("ip not found in db: %s", e)
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logging.error("report error: %s", e)
+        return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 app.include_router(router, prefix="/api")
 
 
 def main():
-    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)
+    uvicorn.run(app, host="0.0.0.0", port=8081)
 
 
 if __name__ == "__main__":
