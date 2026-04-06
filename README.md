@@ -19,10 +19,11 @@ Start your server.
 ```bash
 uvicorn server:app --host 127.0.0.1 --port 8081 --app-dir src/
 ```
-SECRET_TOKEN="123i" (required)
-
+App waiting to next parameters
+```bash
+SECRET_TOKEN="123" (required)
 DB_PATH="test/GeoLite2-Country.mmdb" (optional)
-
+```
 Request example
 ```bash
 curl -X POST -H "AUTH_TOKEN: 123" "http://127.0.0.1:8081/api/v1/report"

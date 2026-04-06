@@ -45,10 +45,6 @@ router = APIRouter(prefix="/v1")
 async def auth_middleware(request: Request, call_next):
     secret_token = request.app.state.secret_token
 
-    if not secret_token:
-        logging.error("secret token is empty")
-        return Response(status_code=status.HTTP_401_UNAUTHORIZED)
-
     if request.headers.get("AUTH_TOKEN", "").strip() != secret_token:
         return Response(status_code=status.HTTP_401_UNAUTHORIZED)
 
