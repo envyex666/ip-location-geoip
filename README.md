@@ -19,7 +19,7 @@ Start your server.
 ```bash
 uvicorn server:app --host 127.0.0.1 --port 8081 --app-dir src/
 ```
-App waiting to next parameters
+App waiting for next parameters
 ```bash
 SECRET_TOKEN="123" (required)
 DB_PATH="test/GeoLite2-Country.mmdb" (optional)
