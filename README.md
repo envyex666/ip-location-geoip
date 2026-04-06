@@ -20,6 +20,7 @@ Start your server.
 uvicorn server:app --host 127.0.0.1 --port 8081 --app-dir src/
 ```
 Required parameter SECRET_TOKEN="123"
+
 (Optional) DB_PATH="test/GeoLite2-Country.mmdb"
 
 Request example
