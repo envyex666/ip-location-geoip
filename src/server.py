@@ -4,16 +4,8 @@ from contextlib import asynccontextmanager
 
 import geoip2.database
 import geoip2.errors
-import uvicorn
 from fastapi import APIRouter, FastAPI, Request, Response, status
 from pydantic import BaseModel
-
-logging.basicConfig(
-    level=logging.WARNING,
-    format="log %(asctime)s %(message)s",
-    datefmt="%Y.%d.%m %H:%M",
-    force=True,
-)
 
 
 class LogReport(BaseModel):
@@ -21,18 +13,24 @@ class LogReport(BaseModel):
     country_code: str
 
 
-class StatusResponse(BaseModel):
-    status_code: int
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.secret_token = os.getenv("SECRET_TOKEN", "").strip()
-    db_dir = os.getenv("DB_DIR", "db").strip()
-    db_path = os.path.join(db_dir, "GeoLite2-Country.mmdb")
-    if not os.path.isfile(db_path):
-        raise FileNotFoundError(db_path)
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="log %(asctime)s %(message)s",
+        datefmt="%Y.%d.%m.%H:%M",
+        force=True,
+    )
+
+    secret_token = os.getenv("SECRET_TOKEN", "").strip()
+    if not secret_token:
+        raise RuntimeError("SECRET_TOKEN is required and must be not empty")
+
+    app.state.secret_token = secret_token
+
+    db_path = os.getenv("DB_PATH", "db/GeoLite2-Country.mmdb").strip()
     app.state.geoip_reader = geoip2.database.Reader(db_path)
+
     try:
         yield
     finally:
@@ -45,12 +43,19 @@ router = APIRouter(prefix="/v1")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    if request.headers.get("AUTH_TOKEN", "").strip() != request.app.state.secret_token:
+    secret_token = request.app.state.secret_token
+
+    if not secret_token:
+        logging.error("secret token is empty")
         return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    if request.headers.get("AUTH_TOKEN", "").strip() != secret_token:
+        return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
     return await call_next(request)
 
 
-@router.post("/report", response_model=StatusResponse)
+@router.post("/report")
 async def report(request: Request):
     try:
         assert request.client is not None
@@ -63,15 +68,11 @@ async def report(request: Request):
         response = request.app.state.geoip_reader.country(ip)
         country_code = response.country.iso_code
 
-        if country_code is None:
-            logging.warning("country code not found for this ip %s", ip)
-            return Response(status_code=status.HTTP_404_NOT_FOUND)
-
         print("LogReport:", LogReport(ip=ip, country_code=country_code))
-        return StatusResponse(status_code=status.HTTP_200_OK)
+        return Response(status_code=status.HTTP_200_OK)
 
-    except geoip2.errors.AddressNotFoundError as e:
-        logging.warning("ip not found in db: %s", e)
+    except geoip2.errors.AddressNotFoundError:
+        logging.warning(f"{ip} not found in db: %s")
         return Response(status_code=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logging.error("report error: %s", e)
@@ -79,11 +80,3 @@ async def report(request: Request):
 
 
 app.include_router(router, prefix="/api")
-
-
-def main():
-    uvicorn.run(app, host="0.0.0.0", port=8081)
-
-
-if __name__ == "__main__":
-    main()
