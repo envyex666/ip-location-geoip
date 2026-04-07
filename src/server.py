@@ -64,7 +64,7 @@ async def report(request: Request):
         response = request.app.state.geoip_reader.country(ip)
         country_code = response.country.iso_code
 
-        print(f"LogReport ip={ip}, country_code={country_code}")
+        print("LogReport:", LogReport(ip=ip, country_code=country_code))
         return Response(status_code=status.HTTP_200_OK)
 
     except geoip2.errors.AddressNotFoundError:
